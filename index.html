@@ -2000,6 +2000,7 @@ function parseCSV(text){
 
 // ── Google Sheets Sync ────────────────────────────────────────────────────────
 // Fixed Google Sheets URLs — same data source for every visitor, no per-user setup needed.
+var GS_CURVES_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRP-5mzVE_H36N3RDVKl--Wr9ilT-kzfjwz0mYm0WVVatbBBXcz21ms6Nd6kLq19ZyXmH-vKz3_526I/pub?gid=1651487182&single=true&output=csv';
 var GS_DATA_URL   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQksD82PhHjMRWhH47Ek6gjzB1jxIGwUfKnD5AYSrnBK2G9sz9NFr8cnkaa8rJT3UafOGr0_5GeOzNJ/pub?gid=512955558&single=true&output=csv';
 var GS_MSTOCK_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQksD82PhHjMRWhH47Ek6gjzB1jxIGwUfKnD5AYSrnBK2G9sz9NFr8cnkaa8rJT3UafOGr0_5GeOzNJ/pub?gid=480278261&single=true&output=csv';
 
@@ -2040,14 +2041,69 @@ function syncFromSheets(silent){
     }
   }
 
-  // Fetch both CSVs in parallel
+  // Fetch all three CSVs in parallel
+  var curvesUrl = GS_CURVES_URL;
   Promise.all([
-    fetchCsv(dataUrl, 'Data'),
+    fetchCsv(curvesUrl, 'Curvas'),
+    fetchCsv(dataUrl,   'Data'),
     fetchCsv(mstockUrl, 'MStock')
   ]).then(function(results){
     try {
-      var dataRows   = parseCSV(results[0]);
-      var mstockRows = parseCSV(results[1]);
+      var curvesRows = parseCSV(results[0]);
+      var dataRows   = parseCSV(results[1]);
+      var mstockRows = parseCSV(results[2]);
+
+      // Parse Curves: row 0=title, row 1=headers, row 2=Q values (col 9+), rows 3+=pump data
+      var qVals = [];
+      if(curvesRows[2]){
+        for(var ci = 9; ci < curvesRows[2].length; ci++){
+          var qv = curvesRows[2][ci];
+          if(qv !== null && qv !== undefined && qv !== '') qVals.push(parseCLNumber(String(qv)));
+          else qVals.push(null);
+        }
+      }
+      var newPumpData  = [];
+      var newMotorData = {};
+      for(var ri = 3; ri < curvesRows.length; ri++){
+        var cr = curvesRows[ri];
+        if(!cr[0] || !String(cr[0]).trim()) continue;
+        var cModelo  = String(cr[0]).trim();
+        var cHp      = cr[1]  != null ? parseCLNumber(String(cr[1]))  : null;
+        var cMm      = cr[2]  != null ? String(cr[2]).trim()           : null;
+        var cInMono  = cr[3]  != null ? parseCLNumber(String(cr[3]))  : null;
+        var cInTrif  = cr[4]  != null ? parseCLNumber(String(cr[4]))  : null;
+        var cIsDol   = cr[5]  != null ? parseCLNumber(String(cr[5]))  : null;
+        var cIsYd    = cr[6]  != null ? parseCLNumber(String(cr[6]))  : null;
+        var cMat     = cr[7]  != null ? String(cr[7]).trim()           : null;
+        var cDia     = cr[8]  != null ? String(cr[8]).trim()           : null;
+        var curve = [];
+        for(var ci2 = 0; ci2 < qVals.length; ci2++){
+          var hv = cr[9 + ci2];
+          if(hv !== null && hv !== undefined && hv !== '' && qVals[ci2] !== null){
+            curve.push(qVals[ci2]);
+            curve.push(parseCLNumber(String(hv)));
+          }
+        }
+        if(!curve.length) continue;
+        var pump = {m: cModelo, p: curve};
+        if(cHp)  pump.hp  = cHp;
+        if(cMm)  pump.mm  = cMm;
+        if(cMat) pump.mat = cMat;
+        if(cDia) pump.dia = cDia;
+        newPumpData.push(pump);
+        if(cMm && !newMotorData[cMm]){
+          var me = {hp: cHp};
+          if(cInMono) me.in_mono = cInMono;
+          if(cInTrif) me.in_trif = cInTrif;
+          if(cIsDol)  me.is_dol  = cIsDol;
+          if(cIsYd)   me.is_yd   = cIsYd;
+          newMotorData[cMm] = me;
+        }
+      }
+      if(newPumpData.length){
+        PUMP_DATA  = newPumpData;
+        MOTOR_DATA = newMotorData;
+      }
 
       // Parse MStock: row 1 has the date, rows 3+ have data
       var stockDate = '';
@@ -2102,14 +2158,21 @@ function syncFromSheets(silent){
       });
 
       RECIPE_DATA = newData;
-      STOCK_MAP   = stockMap;   // save globally for stock-only lookups
+      STOCK_MAP   = stockMap;
       cfgUpdateSummary();
+      // Update pump model count display
+      var pcEl = document.getElementById('pump-count');
+      if(pcEl) pcEl.textContent = PUMP_DATA.length;
+      // Update model hint in search tab
+      var mhEl = document.getElementById('model-hint');
+      if(mhEl) mhEl.textContent = PUMP_DATA.length + ' modelos disponibles — escribe para filtrar';
 
       var n = Object.keys(newData).length;
+      var nCurvas = newPumpData.length || PUMP_DATA.length;
       var syncFecha = new Date().toLocaleString('es-CL');
       st.className='cfg-status ok'; st.style.display='block';
       var stockDateMsg = stockDate ? ' · Stock al <strong>'+stockDate+'</strong>' : '';
-      st.innerHTML = '&#10003; <strong>'+n+' modelos</strong> sincronizados'+stockDateMsg+' · actualizado '+syncFecha;
+      st.innerHTML = '&#10003; <strong>'+nCurvas+' curvas</strong> · <strong>'+n+' recetas</strong> sincronizadas'+stockDateMsg+' · '+syncFecha;
       // Show badge in topbar
       var badge = document.getElementById('stock-date-badge');
       if(badge && stockDate){
@@ -2185,23 +2248,31 @@ function syncFromSheets(silent){
     <div style="font-size:18px;font-weight:700;color:#1a1f2e;margin-bottom:4px">&#9881; Configuración de bases de datos</div>
     <div style="font-size:13px;color:#8898aa;margin-bottom:8px">Carga archivos actualizados sin necesidad de regenerar la herramienta.</div>
 
-    <!-- PUMP CURVES FILE -->
+    <!-- PUMP CURVES — GOOGLE SHEETS SYNC -->
     <div class="card" style="gap:14px">
       <div style="display:flex;align-items:center;gap:10px">
         <div style="width:38px;height:38px;background:#eef2ff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">&#128200;</div>
         <div>
-          <div class="card-title">Curvas de bombas (PUMP_DATA)</div>
-          <div style="font-size:12px;color:#8898aa;margin-top:2px">Archivo Excel de curvas hidráulicas · actualmente <strong id="pump-count">cargando...</strong> modelos</div>
+          <div class="card-title">Curvas de bombas — Google Sheets</div>
+          <div style="font-size:12px;color:#8898aa;margin-top:2px">Sincronización automática al abrir · actualmente <strong id="pump-count">cargando...</strong> modelos</div>
         </div>
       </div>
-      <div id="pump-file-zone" class="cfg-dropzone" onclick="document.getElementById('pump-file-input').click()" ondragover="cfgDragOver(event)" ondragleave="cfgDragLeave(event,'pump-file-zone')" ondrop="cfgDrop(event,'pump')">
-        <div style="font-size:28px;margin-bottom:6px">&#128202;</div>
-        <div style="font-weight:600;font-size:13px;color:#5a6a85">Arrastra el archivo Excel aquí</div>
-        <div style="font-size:12px;color:#a0b4f0;margin-top:4px">o haz clic para seleccionar</div>
-        <div style="font-size:11px;color:#b0bbc8;margin-top:4px">Panelli_Curvas_Bombas.xlsx · hoja "Curvas de Bombas"</div>
+      <div style="font-size:12px;color:#5a6a85;background:#f0f4ff;border:1px solid #c0ccf5;border-radius:8px;padding:10px 12px">
+        &#9432; Las curvas hidráulicas se descargan automáticamente desde Google Sheets al abrir la app. Para actualizar, edita la planilla y haz clic en "Sincronizar ahora".
       </div>
-      <input type="file" id="pump-file-input" accept=".xlsx" style="display:none" onchange="loadPumpFile(event)">
       <div id="pump-status" class="cfg-status" style="display:none"></div>
+      <!-- Manual fallback -->
+      <details style="margin-top:4px">
+        <summary style="font-size:12px;color:#8898aa;cursor:pointer;user-select:none">&#128196; O carga un archivo Excel manualmente (alternativa temporal)</summary>
+        <div style="margin-top:10px">
+          <div id="pump-file-zone" class="cfg-dropzone" onclick="document.getElementById('pump-file-input').click()" ondragover="cfgDragOver(event)" ondragleave="cfgDragLeave(event,'pump-file-zone')" ondrop="cfgDrop(event,'pump')">
+            <div style="font-size:24px;margin-bottom:4px">&#128202;</div>
+            <div style="font-weight:600;font-size:12px;color:#5a6a85">Arrastra el archivo Excel aquí</div>
+            <div style="font-size:11px;color:#a0b4f0;margin-top:3px">o haz clic · Panelli_Curvas_Bombas.xlsx</div>
+          </div>
+          <input type="file" id="pump-file-input" accept=".xlsx" style="display:none" onchange="loadPumpFile(event)">
+        </div>
+      </details>
     </div>
 
     <!-- RECIPE / STOCK — GOOGLE SHEETS SYNC (automático para todos los usuarios) -->
