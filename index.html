@@ -873,7 +873,7 @@ function buildStockSection(pump, qty){
     // "140 PR16 N/23" and "140 PR 16N/23" both become "140 PR16N-23"
     function normForMatch(s){
       return s.toUpperCase()
-        .replace(/PR\s*(\d+)\s*N/g, 'PR$1N')  // PR 16 N -> PR16N
+        .replace(/(\d+)\s*PR\s*(\d+)\s*N/g, '$1PR$2N')  // '140 PR 16 N' -> '140PR16N'
         .replace(/\//g, '-')                      // slashes to dashes
         .replace(/\s+/g, ' ').trim();
     }
