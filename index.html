@@ -868,12 +868,23 @@ function buildStockSection(pump, qty){
   if(!rec){
     // Check if this model has a direct stock entry in STOCK_MAP (pump sold as-is, no assembly)
     var modelKey = pump.model || pump.m;
-    // Try to find by matching the model name inside product descriptions in STOCK_MAP
+
+    // Normalize a string for fuzzy matching:
+    // "140 PR16 N/23" and "140 PR 16N/23" both become "140 PR16N-23"
+    function normForMatch(s){
+      return s.toUpperCase()
+        .replace(/PR\s*(\d+)\s*N/g, 'PR$1N')  // PR 16 N -> PR16N
+        .replace(/\//g, '-')                      // slashes to dashes
+        .replace(/\s+/g, ' ').trim();
+    }
+
+    var modelNorm = normForMatch(modelKey);
     var directStock = null;
     Object.keys(STOCK_MAP).forEach(function(cod){
       var entry = STOCK_MAP[cod];
-      // Match if the MStock product description contains the model name
-      if(entry && entry.desc && entry.desc.toLowerCase().indexOf(modelKey.toLowerCase()) !== -1){
+      if(!entry || !entry.desc) return;
+      var descNorm = normForMatch(entry.desc);
+      if(descNorm.indexOf(modelNorm) !== -1){
         if(!directStock || entry.stk > 0) directStock = entry;
       }
     });
